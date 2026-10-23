@@ -2953,6 +2953,11 @@ static NvShader *shader_load(NSString *pc, int stage, int layer) {
     if (stage == 2 && !j) return nil;   // missing geometry translation: the caller's red line says so
     NSString *lp = [NSString stringWithFormat:@"%@/%@.metallib", g_msl_dir, pc];
     id<MTLLibrary> lib = lib_from_file(lp, &e);
+    if (!lib && j) {   // no metal toolchain on this Mac: compile the translated MSL source at runtime instead
+        NSString *mp = [NSString stringWithFormat:@"%@/%@.metal", g_msl_dir, pc];
+        NSString *src = [NSString stringWithContentsOfFile:mp encoding:NSUTF8StringEncoding error:nil];
+        if (src) { e = nil; lib = [g_dev newLibraryWithSource:src options:nil error:&e]; }
+    }
     if (!lib || !j) { MLOG("[RED] failed to load shader %s: %s", pc.UTF8String, e ? e.localizedDescription.UTF8String : "no reflection json"); return nil; }
     if (![j[@"chain"] isEqual:@DMSH_CHAIN]) { MLOG("[RED] shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DMSH_CHAIN); return nil; }
     if (layer && !j[@"entry_layer"]) { MLOG("[RED] vertex shader %s has no layer entry points", pc.UTF8String); return nil; }

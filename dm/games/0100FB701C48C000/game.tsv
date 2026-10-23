@@ -1,0 +1,20 @@
+# Game profile of Tale of Immortal (鬼谷八荒, Switch, update 1.0.9). Provisional: generated from profile_guess, bring-up pending
+# Unity IL2CPP (SDK 16), subsdk0 = NintendoSDK_movie
+title_id	0100FB701C48C000
+program_id	0100FB701C48C000
+name	Tale of Immortal
+ipa	TaleOfImmortal.ipa
+app_category	public.app-category.games
+build	v131072	1.0.9	main=2607db4e41bc771765c8bdadc4e5a032	subsdk0=7c1a58cac01c4aa3935c6243f69cf0d3	sdk=835c229763ce5c1816a70f875bd70ccd
+package	v131072
+shader_versions	v131072
+modules	main subsdk0 sdk
+romfs_marker	Data/data.unity3d
+zip_store	.assets:.bin:.bundle:.dat:.mp4:.ress:.metallib
+sys_resource	0x1000000
+mem_reserve	0x140000000
+mem_alias	0xB8000000
+mem_stack	0x10000000
+app_pool	0x40000000
+shader_groups	/Resources/=engine /Data/=data
+shader_note	Tale of Immortal shaders

@@ -1,0 +1,20 @@
+# Game profile of POKKEN TOURNAMENT DX (Switch, version 1.3.3, XCI). Provisional: from profile_guess, bring-up pending
+# Bandai Namco custom engine, SDK 4.5, GLSLC subsdk0 (shader compiler), subsdk1 movie, no VAM
+title_id	0100B3F000BE2000
+program_id	0100B3F000BE2000
+name	POKKÉN TOURNAMENT DX
+ipa	PokkenTournamentDX.ipa
+app_category	public.app-category.games
+build	v0	1.3.3	main=49690ba2efdcd7a76a506749e1b4494c	subsdk0=d6fb65924348116bb5525ddd09f51aa9	subsdk1=a4604a0a8b8af7ae0eac1add42a8b978	sdk=af7348498c7759b0f3f0396a8a36014c
+package	v0
+shader_versions	v0
+modules	main subsdk0 subsdk1 sdk
+romfs_marker	Data
+zip_store	.dat:.mp4:.bnk:.pck
+sys_resource	0x0
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+shader_groups	/=data
+shader_note	POKKEN TOURNAMENT DX shaders

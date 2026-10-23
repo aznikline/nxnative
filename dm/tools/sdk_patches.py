@@ -115,4 +115,10 @@ CUTS = {
     (0x1423fc, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
     (0x142468, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
   ],
+  # Tale of Immortal 1.0.9 sdk (SDK 16.2.3): same Unicorn Overlord-family build layout; the node area lives at the
+  # same offsets as that build's (the two mov words exist only here).
+  '835c229763ce5c1816a70f875bd70ccd': [
+    (0x134778, '08fca752', '087ca052', 'AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000'),
+    (0x13480c, '09fca752', '097ca052', 'AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000'),
+  ],
 }
