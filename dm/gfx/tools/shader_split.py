@@ -627,8 +627,10 @@ def mgfx_effect(d, p, label):
 
 def mgfx_shaders(d, label):
     out = []
-    for m in re.finditer(MGFX, d): out += mgfx_effect(d, m.start(), label) or []
-    if label.endswith('.xnb') and b'EffectReader' in d[:0x200] and not out: red(f'{label}: an XNB effect without an MGFX version 8 effect of NVN shaders')
+    for m in re.finditer(MGFX, d):
+        try: out += mgfx_effect(d, m.start(), label) or []
+        except (IndexError, struct.error): pass   # an 'MGFX\x08' that is not the version-8 layout (Stardew Valley's Content/Effects/*.xnb)
+    if label.endswith('.xnb') and b'EffectReader' in d[:0x200] and not out: print(f'[RED] {label}: an XNB effect without an MGFX version 8 effect of NVN shaders', flush=True)
     return out
 
 ONEPACK = b'ONEPACK\0'
