@@ -47,11 +47,24 @@ static void flags_init(void) {
 
 // Zero point of the boot timeline = process creation time (p_starttime from sysctl KERN_PROC_PID, wall clock) converted to the now_ns monotonic time base; same definition on Mac / iOS
 static uint64_t proc_start_mono_ns(void) {
+    uint64_t mono = now_ns();
+#ifdef __OHOS__   // musl: the starttime field of /proc/self/stat, in USER_HZ from boot
+    FILE *f = fopen("/proc/self/stat", "r");
+    if (!f) return mono;
+    char buf[4096]; size_t rd = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[rd] = 0;
+    char *rp = strrchr(buf, ')');   // the comm field can hold spaces/parens
+    if (!rp) return mono;
+    unsigned long long start_ticks = 0; int field = 2;
+    for (char *s = rp + 1; *s && field < 22; s++) if (*s == ' ') { field++; if (field == 22) sscanf(s + 1, "%llu", &start_ticks); }
+    if (!start_ticks) return mono;
+    return start_ticks * (1000000000ull / (unsigned long long)sysconf(_SC_CLK_TCK));
+#else
     struct kinfo_proc kp; size_t n = sizeof kp; int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
-    uint64_t mono = now_ns(); struct timeval tv; gettimeofday(&tv, NULL);
+    struct timeval tv; gettimeofday(&tv, NULL);
     if (sysctl(mib, 4, &kp, &n, NULL, 0) || !n) return mono;
     int64_t age = (int64_t)(tv.tv_sec - kp.kp_proc.p_starttime.tv_sec) * 1000000000ll + (tv.tv_usec - kp.kp_proc.p_starttime.tv_usec) * 1000ll;
     return age > 0 ? mono - (uint64_t)age : mono;
+#endif
 }
 
 // Host loading (independent of UIKit / Metal): read the NSO, relocate, forced take-over, probes / tick gate / keys, start prefetch. By default it runs synchronously in main;

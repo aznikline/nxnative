@@ -3,9 +3,16 @@
 //       iOS defaults to real audio output (the product must have sound), tests that want silence set DM_AUDIO=0 explicitly; Mac defaults to the silent sink (replay / gate checks are silent), DM_AUDIO=1 for real audio output.
 // The contents of AudioOut / AudioOutBuffer / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and only writes the front part of the structs.
 #include "hle.h"
+#ifndef __OHOS__
 #include <AudioToolbox/AudioToolbox.h>
+#endif
 #include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
+#ifdef __OHOS__
+typedef void *AudioUnit;   // no CoreAudio on musl: the field exists so aout compiles; real_audio() is always 0 below
+typedef int OSStatus, AudioUnitRenderActionFlags, AudioTimeStamp, AudioBufferList;
+typedef unsigned int UInt32;
+#endif
 #include <stdatomic.h>
 #include <unistd.h>
 
@@ -119,6 +126,7 @@ static void pull(aout *a, uint8_t *dst, uint64_t n) {
 
 static _Atomic uint64_t g_render_calls;   // Cumulative sound card callbacks (lifecycle verification: must keep growing after resume)
 uint64_t dm_audio_render_calls(void) { return atomic_load_explicit(&g_render_calls, memory_order_relaxed); }
+#ifndef __OHOS__
 static OSStatus au_render(void *ctx, AudioUnitRenderActionFlags *f, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *bl) {
     (void)f; (void)ts; (void)bus; (void)frames;
     aout *a = ctx;
@@ -173,6 +181,11 @@ static void au_open(aout *a) {
 }
 // Silent sink: consumes in real time at 48 kHz every 5 ms. When more than 100 ms behind (iOS suspended the whole process in the background, SIGSTOP on the Mac), restart the count from now and do not make up the missed time --
 // making it up would pull hundreds of times in one go (seconds' worth), releasing all of the game's buffers and logging hundreds of underruns; a suspended console does not play that stretch either
+#else
+static OSStatus au_create(aout *a) { (void)a; return -1; }
+static void *au_create_th(void *a) { (void)a; return (void *)(intptr_t)-1; }
+static void au_open(aout *a) { (void)a; }
+#endif
 static void *null_sink(void *p) {
     aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time
     uint64_t bytes = (uint64_t)RATE / 200 * 2 * a->ch, t = now_ns();
@@ -190,8 +203,15 @@ static void backend_stop(aout *a) {
     if (a->backend == BK_AU) { AudioOutputUnitStop(a->au); a->backend = BK_NONE; }
     else if (a->backend == BK_NULL) null_stop(a);
 }
-static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 : TARGET_OS_IPHONE; }
+static int real_audio(void) { const char *e = getenv("DM_AUDIO"); return e ? atoi(e) != 0 :
+#ifndef __OHOS__
+    TARGET_OS_IPHONE;
+#else
+    0;   // no AudioUnit on HarmonyOS: the silent sink keeps the buffers' real-time pace until an OHAudio backend exists
+#endif
+}
 // Start the AudioUnit of an output whose backend is BK_NONE (callers hold g_aos_lock). When the device refuses (the session is held by a call, or is being reset), the silent sink stands in and the watchdog retries
+#ifndef __OHOS__
 static void au_go(aout *a, uint64_t now) {
     OSStatus st = a->au ? AudioOutputUnitStart(a->au) : -1;
     a->wd_n = atomic_load_explicit(&a->cb_n, memory_order_relaxed); a->wd_t = now;
@@ -234,6 +254,9 @@ static void *au_watchdog(void *p) {
     return NULL;
 }
 static void au_watchdog_start(void) { pthread_t t; if (!pthread_create(&t, NULL, au_watchdog, NULL)) pthread_detach(t); }
+#else
+static void au_watchdog_start(void) {}
+#endif
 
 // AudioOutParameter = { int32 sampleRate; uint16 channelCount; uint16 _r; ... }, 0 = system default (48 kHz / 2 channels)
 HLE_FORCE("_ZN2nn5audio27InitializeAudioOutParameterEPNS0_17AudioOutParameterE", "audio output parameter defaults", void, h_au_InitParam, uint8_t *p) { memset(p, 0, 8); }

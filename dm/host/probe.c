@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && !defined(__OHOS__)
 #include <mach/mach_vm.h>   // the write watch (DM_PROBE_WATCH): iOS's SDK has no mach_vm.h
 #endif
 #include <pthread.h>
@@ -276,6 +276,10 @@ static void *watch_arm(void *p) {
     (void)p;
     for (;;) {
         if (!atomic_load(&g_warmed)) {
+#if defined(__OHOS__)   // no mach_vm_region/remap: unprotect in place (stores between read and unprotect are lost, acceptable for the debug watch)
+            atomic_store(&g_warmed, 1); mprotect((void *)g_wpg, g_wpsz, PROT_READ | PROT_WRITE); mprotect((void *)g_wpg, g_wpsz, PROT_READ);
+            LOG("WATCH %#llx armed, value %#llx", (unsigned long long)g_wat, (unsigned long long)watch_val());
+#else
             mach_vm_address_t ra = g_wpg; mach_vm_size_t rs = 0; vm_region_basic_info_data_64_t bi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj;
             if (!mach_vm_region(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&bi, &cnt, &obj) && ra <= g_wpg && (bi.protection & VM_PROT_WRITE)) {
                 if (!g_walias) {   // a second, writable mapping of the same page, for the handler's stores
@@ -284,6 +288,7 @@ static void *watch_arm(void *p) {
                     LOG("WATCH %#llx armed, value %#llx%s", (unsigned long long)g_wat, (unsigned long long)watch_val(), g_walias ? "" : " ([RED] no alias mapping: every store unprotects the page)");
                 }
                 atomic_store(&g_warmed, 1); mprotect((void *)g_wpg, g_wpsz, PROT_READ); }
+#endif
         }
         usleep(1000);
     }
