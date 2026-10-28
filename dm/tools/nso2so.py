@@ -54,6 +54,10 @@ def main(bin_path, fx_path, out_path):
         nonlocal foff
         # OHOS ldso requires p_offset == p_vaddr (mod page) or dlopen fails (measured on device)
         foff += (vaddr - foff) % PAGE
+        if flags & PF_X and memsz > len(data):
+            # an RX load with a bss tail makes the linker map anonymous exec pages, which the app
+            # sandbox denies (measured: dlopen "failed to map library errno=13"); pad the file instead
+            data = data + b'\0' * (memsz - len(data))
         chunks.append((vaddr, foff, len(data), memsz, flags, data))
         foff += len(data)
         foff = (foff + PAGE - 1) & ~(PAGE - 1)
