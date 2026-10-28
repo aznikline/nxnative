@@ -98,3 +98,12 @@ target_compile_options(dm PRIVATE $<$<COMPILE_LANGUAGE:C>:${DM_CFLAGS} -std=gnu1
 target_link_libraries(dm PRIVATE -Wl,--whole-archive dmplatform dmcore -Wl,--no-whole-archive dm_vulkan_engine
   ace_napi.z ace_ndk.z hilog_ndk.z hitrace_ndk.z native_window native_display_manager ohaudio qos vulkan m dl)
 target_link_options(dm PRIVATE -Wl,--no-undefined -Wl,-z,nostart-stop-gc -Wl,-Bsymbolic)
+
+# 每游戏改写模块：nso2so.py 产物 lib<mod>.so 与 libdm.so 并列打包，loader.c 经 dlopen 装载（鸿蒙唯一执行页路径）。
+# 目录在 local.cmake 里给 DM_MOD_LIB_DIR（本机路径，不入库）。
+# Per-game rewritten modules: nso2so.py outputs lib<mod>.so sit beside libdm.so; loader.c dlopens them
+# (the only executable-page path on HarmonyOS). DM_MOD_LIB_DIR comes from local.cmake (machine path, uncommitted).
+if(DM_MOD_LIB_DIR)
+  file(GLOB DM_MOD_LIBS ${DM_MOD_LIB_DIR}/lib*.so)
+  file(COPY ${DM_MOD_LIBS} DESTINATION ${CMAKE_LIBRARY_OUTPUT_DIRECTORY})
+endif()

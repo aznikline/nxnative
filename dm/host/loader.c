@@ -391,29 +391,42 @@ static void map_image(module_t *m, const char *dir) {
 // ([patch][gap][image] for negative PATCH_OFF), so m->base = link_map base + the pre gap.
 // Everything the host writes afterwards lands in the .so's RW data segment -- nothing touches RX pages.
 #include <dlfcn.h>
-#include <link.h>
 static const char *bundle_lib_dir(void) {
     Dl_info di;
     if (!dladdr((void *)bundle_lib_dir, &di) || !di.dli_fname) die("dladdr");
     static char dir[1024]; snprintf(dir, sizeof dir, "%s", di.dli_fname);
     char *s = strrchr(dir, '/'); if (!s) die("dladdr path"); *s = 0; return dir;
 }
+// OHOS musl exports neither dlinfo nor link_map's phdr fields; read the load bias from
+// /proc/self/maps (lowest mapping of this file) and the image extent from the .so's own phdrs.
+static uintptr_t maps_base(const char *path) {
+    FILE *f = fopen("/proc/self/maps", "r"); if (!f) die("maps");
+    char line[512]; uintptr_t base = 0;
+    while (fgets(line, sizeof line, f)) {
+        if (!strstr(line, path)) continue;
+        uintptr_t lo; if (sscanf(line, "%lx", &lo) == 1 && (!base || lo < base)) base = lo;
+    }
+    fclose(f); return base;
+}
+static uint64_t image_extent(const char *path) {
+    int fd = open(path, O_RDONLY); if (fd < 0) die("%s: open", path);
+    uint8_t eh[64], ph[56]; if (read(fd, eh, 64) != 64) die("%s: ehdr", path);
+    uint64_t off = *(uint64_t *)(eh + 32), top = 0; uint16_t n = *(uint16_t *)(eh + 56);
+    for (int i = 0; i < n; i++) {
+        if (pread(fd, ph, 56, off + (uint64_t)i * 56) != 56) die("%s: phdr", path);
+        if (*(uint32_t *)ph == 1) { uint64_t end = *(uint64_t *)(ph + 16) + *(uint64_t *)(ph + 40); if (end > top) top = end; }
+    }
+    close(fd); return top;
+}
 static void map_image(module_t *m, const char *dir) {
     (void)dir;
     char path[1100]; snprintf(path, sizeof path, "%s/lib%s.so", bundle_lib_dir(), m->name);
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!h) die("%s: dlopen %s: %s", m->name, path, dlerror());
-    struct link_map *lm = NULL;
-    if (dlinfo(h, RTLD_DI_LINKMAP, &lm) || !lm) die("%s: dlinfo", m->name);
     uint64_t pre = m->patch_off < 0 ? (uint64_t)-m->patch_off : 0;
-    // image extent: the top of the highest LOAD segment (IMAGE_SIZE is only written for negative PATCH_OFF)
-    m->size = 0;
-    for (int i = 0; lm->l_phdr && i < lm->l_phnum; i++)
-        if (lm->l_phdr[i].p_type == PT_LOAD && lm->l_phdr[i].p_vaddr + lm->l_phdr[i].p_memsz > m->size)
-            m->size = lm->l_phdr[i].p_vaddr + lm->l_phdr[i].p_memsz;
-    m->size -= pre;   // the .so's reservation includes the pre-gap; m->size counts from the base
+    m->size = image_extent(path) - pre;
     if (m->patch_off < 0) m->patch_len = 0;   // patch area is part of the .so's own RX segment
-    m->base = (uint8_t *)(uintptr_t)lm->l_addr + pre;
+    m->base = (uint8_t *)maps_base(path) + pre;
     install_key_page(m);
 }
 #else
