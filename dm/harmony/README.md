@@ -69,3 +69,52 @@ jitter 3.7 vs 8.2 ms, frames over 16.7 ms 40 vs 179.
 Not done yet: `gfx-present-native` (present at the game's output size) is off on HarmonyOS until buffer geometry
 versus compositor scaling is checked on a device; the patcher's no-red-zone layout is Android-only for now
 (`NOREDZONE` in `patch_nso.py`), pending regenerated modules and a device run on HarmonyOS.
+
+## Reproducing the current device state (Silksong bring-up)
+
+The port currently runs Silksong's own code on device through four rewritten modules packaged as
+signed shared objects (`libs/arm64-v8a/lib{main,rtld,sdk,subsdk0}.so`, the only executable path the
+sandbox grants). The release `silksong-ohos-so-v2` carries the four modules; the release
+`silksong-ohos-state-20261028` carries `dm_artifacts.tgz` (the `.xgs` shader set plus the
+`files/dm/out` tables from the reference run) and `missing_programs.tgz` (the runtime-dumped
+programs the static shader split missed).
+
+Environment and build:
+
+```sh
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio26.app/Contents/sdk
+export JAVA_HOME=/Applications/DevEco-Studio26.app/Contents/jbr/Contents/Home
+export PATH="$JAVA_HOME/bin:/Applications/DevEco-Studio26.app/Contents/tools/node/bin:/Applications/DevEco-Studio26.app/Contents/tools/ohpm/bin:$PATH"
+# local.cmake: set DM_MOD_LIB_DIR to the directory holding the four lib<mod>.so
+cd dm/harmony/app
+hvigorw --mode module -p product=release -p module=entry@release -p buildMode=release assembleHap
+```
+
+Signing (debug materials under `~/.ohos/config/`, passwords are the DevEco-obfuscated values in
+`build-profile.json5`, decrypted with the hvigor `DecipherUtil` scheme; never committed):
+
+```sh
+java -jar "$DEVECO_SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar" sign-app \
+  -mode localSign -keyAlias <alias> -appCertFile <cert.cer> -profileFile <profile.p7b> \
+  -profileSigned 1 -inForm zip -keystoreFile <key.p12> -signAlg SHA256withECDSA \
+  -compatibleVersion 260000026 -signCode 1 -keyPwd <key> -keystorePwd <store> \
+  -inFile entry/build/release/outputs/release/entry-release-unsigned.hap -outFile signed.hap
+```
+
+Staging on device (the app reads `files/dm/`):
+
+```sh
+hdc file send out/*.tsv out/build_src.sha256 \
+  /data/app/el2/100/base/com.xiao.boluo/haps/entry/files/dm/out/
+hdc file send shaders/*.xgs \
+  /data/app/el2/100/base/com.xiao.boluo/haps/entry/files/dm/shaders/
+hdc install -r signed.hap
+hdc shell "aa start -b com.xiao.boluo -a EntryAbility"
+hdc shell "hilog -x | grep A0D2E0"
+```
+
+Current wall: programs the static shader split missed. Each run fatals on one `missing-<key>`
+shader, whose control/code body the engine dumps into `files/dm/shaders/`; translate it offline and
+push the `.xgs` back, then rerun. Everything before it is proven on device: dlopen of all four
+modules, relocations, `nnosInitialize`, fs/oe/audio services, NVN init, swapchain, and presented
+frames (first frames at ~30-40 ms).

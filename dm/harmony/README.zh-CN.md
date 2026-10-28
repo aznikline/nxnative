@@ -53,3 +53,32 @@ Mate 90 Pro Max，在罗格营地按住摇杆 12 秒（hitrace）：59.7 fps，�
 
 尚未做：`gfx-present-native`（按游戏出图尺寸上屏）在鸿蒙上先关，等真机核对缓冲尺寸与合成缩放；改写器的无红区排法暂只用于安卓
 （`patch_nso.py` 的 `NOREDZONE`），鸿蒙要重出模块并真机测试后再开。
+
+## 复现当前设备状态（Silksong bring-up)
+
+当前移植把 Silksong 四个改写模块打包成签名 .so 装进 HAP(`libs/arm64-v8a/lib{main,rtld,sdk,subsdk0}.so` —— 沙箱里唯一可执行的代码路径）在真机上运行。release `silksong-ohos-so-v2` 提供四个模块；release `silksong-ohos-state-20261028` 提供 `dm_artifacts.tgz`（全部 `.xgs` + `files/dm/out` 的表）和 `missing_programs.tgz`（运行时 dump 出的、静态拆分遗漏的 shader 程序）。
+
+环境与构建：
+
+```sh
+export DEVECO_SDK_HOME=/Applications/DevEco-Studio26.app/Contents/sdk
+export JAVA_HOME=/Applications/DevEco-Studio26.app/Contents/jbr/Contents/Home
+export PATH="$JAVA_HOME/bin:/Applications/DevEco-Studio26.app/Contents/tools/node/bin:/Applications/DevEco-Studio26.app/Contents/tools/ohpm/bin:$PATH"
+# local.cmake: 把 DM_MOD_LIB_DIR 指向放四个 lib<mod>.so 的目录
+cd dm/harmony/app
+hvigorw --mode module -p product=release -p module=entry@release -p buildMode=release assembleHap
+```
+
+签名（debug 材料在 `~/.ohos/config/`，口令是 `build-profile.json5` 里的 DevEco 混淆值，按 hvigor `DecipherUtil` 方案解出；绝不入库）:
+
+```sh
+java -jar "$DEVECO_SDK_HOME/default/openharmony/toolchains/lib/hap-sign-tool.jar" sign-app \
+  -mode localSign -keyAlias <别名> -appCertFile <证书.cer> -profileFile <profile.p7b> \
+  -profileSigned 1 -inForm zip -keystoreFile <私钥.p12> -signAlg SHA256withECDSA \
+  -compatibleVersion 260000026 -signCode 1 -keyPwd <key> -keystorePwd <store> \
+  -inFile entry/build/release/outputs/release/entry-release-unsigned.hap -outFile signed.hap
+```
+
+设备 staging（应用读 `files/dm/`):tsv 进 `files/dm/out/`、`.xgs` 进 `files/dm/shaders/`、`hdc install -r` 后 `aa start` 拉起、`hilog -x | grep A0D2E0` 看日志。
+
+当前墙：静态拆分遗漏的 shader 程序 —— 每次运行停在一个 `missing-<key>`，引擎已把它的 control/code 本体 dump 到 `files/dm/shaders/`；离线翻译出 `.xgs` 推回再跑。之前的链路全部真机验证：四个模块 dlopen、重定位、`nnosInitialize`、fs/oe/音频、NVN 初始化、swapchain、已上屏的帧（首帧约 30-40 ms)。
