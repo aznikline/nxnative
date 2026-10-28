@@ -84,6 +84,14 @@ void pin_update(){
     if(changed || pin_drifts<=4 || (r && pin_failures<=4))__android_log_print(ANDROID_LOG_INFO,"dm-vulkan","NVN pin tid=%d %s mask=%x result=%d errno=%d drifts=%u failures=%u",int(gettid()),want?"pinned":"released",want?pin_mask:0u,r,err,pin_drifts,pin_failures);
 }
 void log_message(void*,const char *text){__android_log_print(ANDROID_LOG_INFO,"dm-vulkan","%s",text);}
+// OHOS vulkan_core.h ships the VK_EXT_shader_viewport_index_layer guard + extension name but not the
+// feature struct ("preprocessor guard only"); supply the registry values so the pNext query compiles.
+#if defined(VK_EXT_shader_viewport_index_layer) && !defined(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_VIEWPORT_INDEX_LAYER_FEATURES_EXT)
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_VIEWPORT_INDEX_LAYER_FEATURES_EXT ((VkStructureType)1000255000)
+typedef struct VkPhysicalDeviceShaderViewportIndexLayerFeaturesEXT {
+    VkStructureType sType; void *pNext; VkBool32 shaderViewportIndexLayer;
+} VkPhysicalDeviceShaderViewportIndexLayerFeaturesEXT;
+#endif
 [[noreturn]] void fatal(void*,const char *text){__android_log_print(ANDROID_LOG_FATAL,"dm-vulkan","%s",text);abort();}
 void destroy_present_semaphores(){for(auto s:finished)if(s)vkDestroySemaphore(device,s,nullptr);finished.clear();}
 // 调用者先等队列空闲；基础WSI销毁仍沿用WaitIdle惯例，不声称提供呈现栅栏保证。
@@ -317,7 +325,7 @@ extern "C" int dm_android_vk_initialize(const char *path,char *error,size_t byte
      for(size_t at=0;at<all.size();at+=900)__android_log_print(ANDROID_LOG_INFO,"dm-vulkan","Device extensions [%zu]: %s",at/900,all.substr(at,900).c_str());
      VkPhysicalDeviceExternalMemoryHostPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};VkPhysicalDeviceProperties2 pr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};pr.pNext=&host;vkGetPhysicalDeviceProperties2(physical,&pr);
      __android_log_print(ANDROID_LOG_INFO,"dm-vulkan","Device %s api=%u.%u.%u driver=%#x minImportedHostPointerAlignment=%llu",pr.properties.deviceName,VK_VERSION_MAJOR(pr.properties.apiVersion),VK_VERSION_MINOR(pr.properties.apiVersion),VK_VERSION_PATCH(pr.properties.apiVersion),pr.properties.driverVersion,(unsigned long long)host.minImportedHostPointerAlignment);}
-    std::vector<const char*> dext={VK_KHR_SWAPCHAIN_EXTENSION_NAME};if(mirror)dext.push_back(VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);if(vil&&vila.shaderViewportIndexLayer){dext.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);log_message(0,"dm-vulkan","VK_EXT_shader_viewport_index_layer enabled");}
+    std::vector<const char*> dext={VK_KHR_SWAPCHAIN_EXTENSION_NAME};if(mirror)dext.push_back(VK_KHR_SAMPLER_MIRROR_CLAMP_TO_EDGE_EXTENSION_NAME);if(vil&&vila.shaderViewportIndexLayer){dext.push_back(VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME);log_message(0,"VK_EXT_shader_viewport_index_layer enabled");}
     // Diagnostic (marker gfx-pipe-stats): the driver's per-pipeline statistics (VK_KHR_pipeline_executable_properties).
     VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pef{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR};
     if(FILE *ps=[&]{std::string dir=path;size_t cut=dir.find_last_of('/');return fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-pipe-stats").c_str(),"rb");}()){fclose(ps);dext.push_back(VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME);pef.pipelineExecutableInfo=VK_TRUE;pef.pNext=draw.pNext;draw.pNext=&pef;}
