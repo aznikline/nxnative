@@ -3604,8 +3604,8 @@ void execute(const uint8_t *pc,unsigned depth,uint64_t &budget){
         case OP_RAST_DISCARD:state.rast_discard=payload<p_rast_discard>(p,n).on;break;
         case OP_PRIM_RESTART:state.prim_restart=payload<p_prim_restart>(p,n).on;break;
         case OP_BIND_TEX1:{p_bind_handles t;const p_bind_handles *a=bind_rec(h.op,p,&t);need(a->stage>=0 && a->stage<6 && a->first>=0 && a->first+a->n<=128,"Invalid descriptor binding record");memcpy(state.tex[a->stage]+a->first,a->h,a->n*8);++tex_gen[a->stage];break;}
-        case OP_DRAW:{auto a=payload<p_draw>(p,n);draw(a.prim,a.first,a.count,nullptr);break;}
-        case OP_DRAW_IDX:{auto a=payload<p_draw_idx>(p,n);draw(a.prim,0,a.count,&a);break;}
+        case OP_DRAW:{p_draw t;const p_draw *a=draw_rec(p,n+8,&t);draw(a->prim,a->first,a->count,nullptr);break;}
+        case OP_DRAW_IDX:{p_draw_idx t;const p_draw_idx *a=draw_idx_rec(p,n+8,&t);draw(a->prim,0,a->count,a);break;}
         case OP_DISPATCH:dispatch(payload<p_dispatch>(p,n));break;
         // Commands ends the open pass and records a full barrier. The explicit barrier and finish() recorded the same barrier
         // twice more with no command between them (3 per game barrier, ~130 per D2R fight frame), which Vulkan treats as one.
