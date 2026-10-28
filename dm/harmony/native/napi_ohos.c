@@ -24,6 +24,7 @@ void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
 int dm_main(int argc, char **argv);
 static const char *ev_run_all(char *r, size_t n);
+static void ev_bundle_probe(void);
 
 #define HLOG(lvl, tag, ...) do { char b_[1024]; snprintf(b_, sizeof b_, __VA_ARGS__); OH_LOG_Print(LOG_APP, lvl, 0xD2E0, tag, "%{public}s", b_); } while (0)
 
@@ -297,7 +298,45 @@ static const char *ev_run_all(char *r, size_t n) {
         int k = snprintf(p, left, "%s%s", line, i + 1 < sizeof v / sizeof v[0] ? "; " : ""); p += k; left -= k;
         LOG("boot: exec memory probe %s", line);
     }
+    ev_bundle_probe();
     return r;
+}
+// Round 2 (dm/harmony/probe/exec_variants.c main2): the bundle's signed .so is the only file with an
+// exec label inside the sandbox — check whether it maps RX / at MAP_FIXED, and whether dlopen works.
+#include <dlfcn.h>
+static void ev_try_bundle(const char *name, const char *path, int prot, uint64_t fixed) {
+    char out[160];
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { LOG("boot: exec memory probe %-40s open errno %d", name, errno); return; }
+    void *pg = mmap((void *)fixed, 0x4000, prot, MAP_PRIVATE | (fixed ? MAP_FIXED : 0), fd, 0);
+    if (pg == MAP_FAILED) snprintf(out, sizeof out, "mmap errno %d", errno);
+    else { snprintf(out, sizeof out, "mapped at %p", pg); munmap(pg, 0x4000); }
+    close(fd);
+    LOG("boot: exec memory probe %-40s %s", name, out);
+}
+static void ev_bundle_probe(void) {
+    FILE *f = fopen("/proc/self/maps", "r"); char line[512], so[256] = "";
+    while (f && fgets(line, sizeof line, f)) if (strstr(line, "/libdm.so")) { sscanf(line, "%*[^ ] %*[^ ] %*[^ ] %*[^ ] %*[^ ] %255s", so); break; }
+    if (f) fclose(f);
+    LOG("boot: exec memory probe bundle so found: %s", so[0] ? so : "(none)");
+    if (!so[0]) return;
+    ev_try_bundle("signed .so RX", so, PROT_READ | PROT_EXEC, 0);
+    ev_try_bundle("signed .so RWX", so, PROT_READ | PROT_WRITE | PROT_EXEC, 0);
+    ev_try_bundle("signed .so RW mmap", so, PROT_READ | PROT_WRITE, 0);
+    ev_try_bundle("signed .so RX MAP_FIXED", so, PROT_READ | PROT_EXEC, 0x5000000000ULL);
+    void *h = dlopen(so, RTLD_NOW);
+    LOG("boot: exec memory probe %-40s %s", so, h ? "dlopen ok" : dlerror());
+    // Round 3: does the exec label travel with a copy? cp libdm.so into the app files dir and dlopen it.
+    char cp[320]; snprintf(cp, sizeof cp, "%s/ev_libdm_copy.so", g_files);
+    int in = open(so, O_RDONLY), out_ = open(cp, O_CREAT | O_RDWR | O_TRUNC, 0755);
+    if (in < 0 || out_ < 0) LOG("boot: exec memory probe copied .so dlopen: copy errno %d", errno);
+    else {
+        char buf[65536]; ssize_t n; while ((n = read(in, buf, sizeof buf)) > 0) write(out_, buf, n);
+        close(in); close(out_);
+        void *h2 = dlopen(cp, RTLD_NOW);
+        LOG("boot: exec memory probe copied .so dlopen                   %s", h2 ? "dlopen ok" : dlerror());
+        unlink(cp);
+    }
 }
 static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
     (void)info; char r[512];
