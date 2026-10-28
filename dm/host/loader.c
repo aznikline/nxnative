@@ -384,6 +384,38 @@ static void map_image(module_t *m, const char *dir) {
     remap_at(m, base + m->patch_off, x1, z1, FALSE, VM_PROT_READ | VM_PROT_EXECUTE);
     m->base = (uint8_t *)base; install_key_page(m);
 }
+#elif defined(__OHOS__)
+// HarmonyOS: executable pages come only from the system linker (sandbox probes: anon mprotect EINVAL,
+// file mmap RX EACCES, dlopen on bundle .so ok). Each rewritten module is packed into a signed .so by
+// dm/tools/nso2so.py beside libdm.so and dlopen'd here; the .so's vaddr layout reproduces map_image's
+// ([patch][gap][image] for negative PATCH_OFF), so m->base = link_map base + the pre gap.
+// Everything the host writes afterwards lands in the .so's RW data segment -- nothing touches RX pages.
+#include <dlfcn.h>
+#include <link.h>
+static const char *bundle_lib_dir(void) {
+    Dl_info di;
+    if (!dladdr((void *)bundle_lib_dir, &di) || !di.dli_fname) die("dladdr");
+    static char dir[1024]; snprintf(dir, sizeof dir, "%s", di.dli_fname);
+    char *s = strrchr(dir, '/'); if (!s) die("dladdr path"); *s = 0; return dir;
+}
+static void map_image(module_t *m, const char *dir) {
+    (void)dir;
+    char path[1100]; snprintf(path, sizeof path, "%s/lib%s.so", bundle_lib_dir(), m->name);
+    void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) die("%s: dlopen %s: %s", m->name, path, dlerror());
+    struct link_map *lm = NULL;
+    if (dlinfo(h, RTLD_DI_LINKMAP, &lm) || !lm) die("%s: dlinfo", m->name);
+    uint64_t pre = m->patch_off < 0 ? (uint64_t)-m->patch_off : 0;
+    // image extent: the top of the highest LOAD segment (IMAGE_SIZE is only written for negative PATCH_OFF)
+    m->size = 0;
+    for (int i = 0; lm->l_phdr && i < lm->l_phnum; i++)
+        if (lm->l_phdr[i].p_type == PT_LOAD && lm->l_phdr[i].p_vaddr + lm->l_phdr[i].p_memsz > m->size)
+            m->size = lm->l_phdr[i].p_vaddr + lm->l_phdr[i].p_memsz;
+    m->size -= pre;   // the .so's reservation includes the pre-gap; m->size counts from the base
+    if (m->patch_off < 0) m->patch_len = 0;   // patch area is part of the .so's own RX segment
+    m->base = (uint8_t *)(uintptr_t)lm->l_addr + pre;
+    install_key_page(m);
+}
 #else
 static uint8_t *slurp(const char *path, size_t *n) {
     int fd = open(path, O_RDONLY);
