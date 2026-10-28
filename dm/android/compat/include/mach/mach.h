@@ -81,6 +81,11 @@ kern_return_t task_threads(mach_port_t task, thread_act_array_t *out, mach_msg_t
 
 typedef struct { int seconds, microseconds; } time_value_t;
 typedef struct { time_value_t user_time, system_time; int cpu_usage, policy, run_state, flags, suspend_count, sleep_time; } thread_basic_info_data_t;
+#define TH_STATE_RUNNING 1
+#define TH_STATE_STOPPED 2
+#define TH_STATE_WAITING 3
+#define TH_STATE_UNINTERRUPTIBLE 4
+#define TH_STATE_HALTED 5
 #define THREAD_BASIC_INFO 3
 #define THREAD_BASIC_INFO_COUNT ((mach_msg_type_number_t)(sizeof(thread_basic_info_data_t) / sizeof(int)))
 kern_return_t thread_info(thread_act_t t, int flavor, thread_info_t out, mach_msg_type_number_t *count);

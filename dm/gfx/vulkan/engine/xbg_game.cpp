@@ -3597,8 +3597,7 @@ void execute(const uint8_t *pc,unsigned depth,uint64_t &budget){
         case OP_COPY_T2B:copy_texture_buffer(payload<p_copy_b2t>(p,n),true);break;
         case OP_COPY_T2T:copy_texture(payload<p_copy_t2t>(p,n));break;
         case OP_CLEAR_TEX:clear_texture(payload<p_clear_tex>(p,n));break;
-        case OP_COPY_STRIDE:state.copy_stride=payload<p_copy_stride>(p,n).stride;need(state.copy_stride>=0,"Negative copy stride");break;
-        case OP_COPY_IMAGE_STRIDE:state.copy_image_stride=payload<p_copy_stride>(p,n).stride;need(state.copy_image_stride>=0,"Negative copy image stride");break;
+        case OP_COPY_STRIDE:{auto s=payload<p_copy_stride>(p,n);need(s.stride>=0,"Negative copy stride");(s.image?state.copy_image_stride:state.copy_stride)=s.stride;break;}
         case OP_BLEND_COLOR:{auto a=payload<p_blend_color>(p,n);memcpy(state.blend_color,a.rgba,16);break;}
         case OP_COUNT_:{uint32_t size=payload<uint32_t>(p,n);need(size && size<=properties.limits.maxTessellationPatchSize,"Invalid tessellation patch size");state.patch_size=size;break;}
         case OP_COUNT_+1:{auto s=payload<sync_t>(p,n);need(s.fenced && s.fence<=submitted+1,"Command wait on unresolved external sync");

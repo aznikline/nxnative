@@ -92,7 +92,7 @@ double dm_pace_hz(double screen_hz, double floor_hz) { return nvn_pace_hz(screen
 __attribute__((weak)) int dm_fps_setting(void){return 60;}
 int mtl_fps_target(void){return dm_fps_setting()==30?30:60;}
 int mtl_link_active(void){return 0;}
-int mtl_link_wait_tick(uint64_t timeout){(void)timeout;return 0;}
+int mtl_link_wait_tick(int vsyncs, uint64_t timeout_ns){(void)vsyncs;(void)timeout_ns;return 0;}
 int mtl_warm_wait(int timeout){(void)timeout;return 0;}
 void xbg_record_command(cmd_t *c,const void *record,uint32_t bytes){if(!c||!c->recording||bytes<8||(bytes&7))die("Invalid cloned record");for(int tries=0;!c->cur||c->cur+bytes+24>c->end;tries++){if(!c->cb||tries==2)die("Command memory exhausted");xbg_invoke_command_callback(c,bytes+24);}memcpy(c->cur,record,bytes);c->cur+=bytes;}
 // ---------- 计时与统计（无图形时全 0） ----------
@@ -130,6 +130,11 @@ void mtl_ui_ghost(int on, float px, float py, const float grid[4], float cx, flo
 int mtl_ui_ghost_rect(float r[4]) { (void)r; return 0; }
 int dm_nvn_ruler_truth(void) { return 0; }
 void dm_gfx_shot_at(long k, const char *path) { (void)k; VLOG("截图接口暂未接入：%s", path); }
+// DM_CTL debug dumps (hle_hid.c's ctl command line): the Metal backend implements them; on Vulkan they do nothing
+void dm_gfx_texlist(int target) { (void)target; }
+void dm_gfx_texraw(uint64_t serial, const char *path) { (void)serial; (void)path; }
+void dm_gfx_texdump_next(const char *path) { (void)path; }
+void dm_gfx_passdump_next(long n) { (void)n; }
 // nxnative surface additions (the Metal backend carries these; on Vulkan they are no-ops or stubs —
 // mtl_device/ext_tex/present_ext serve the separate dm/gfx/vk Vulkan layer, which HarmonyOS does not build)
 void mtl_alias_drop_pool(const void *pool) { xbg_legacy_pool_del((void *)pool); }

@@ -3,11 +3,14 @@
 //       iOS defaults to real audio output (the product must have sound), tests that want silence set DM_AUDIO=0 explicitly; Mac defaults to the silent sink (replay / gate checks are silent), DM_AUDIO=1 for real audio output.
 // The contents of AudioOut / AudioOutBuffer / AudioOutParameter are read and written only through the interfaces below; the host defines its own internal layout and only writes the front part of the structs.
 #include "hle.h"
+#include <pthread/qos.h>
 #ifndef __OHOS__
 #include <AudioToolbox/AudioToolbox.h>
 #endif
 #include <TargetConditionals.h>
+#ifndef __OHOS__
 #include <dispatch/dispatch.h>
+#endif
 #ifdef __OHOS__
 typedef void *AudioUnit;   // no CoreAudio on musl: the field exists so aout compiles; real_audio() is always 0 below
 typedef int OSStatus, AudioUnitRenderActionFlags, AudioTimeStamp, AudioBufferList;
@@ -185,6 +188,11 @@ static void au_open(aout *a) {
 static OSStatus au_create(aout *a) { (void)a; return -1; }
 static void *au_create_th(void *a) { (void)a; return (void *)(intptr_t)-1; }
 static void au_open(aout *a) { (void)a; }
+// No AudioUnit on musl: a->au stays NULL and the backend never reaches BK_AU, so these call sites are unreachable but must still link
+static void au_go(aout *a, uint64_t now) { (void)a; (void)now; }
+#define AudioOutputUnitStop(u) ((void)0)
+#define AudioUnitUninitialize(u) ((void)0)
+#define AudioComponentInstanceDispose(u) ((void)0)
 #endif
 static void *null_sink(void *p) {
     aout *a = p; uint8_t scratch[RATE / 200 * 2 * 8]; dm_host_helper_qos(QOS_CLASS_USER_INTERACTIVE);   // paces the game's audio in real time

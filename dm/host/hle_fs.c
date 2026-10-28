@@ -119,13 +119,26 @@ static Result mount(const char *name, const char *dir, int ro) { return mount_ex
 // APFS is case-insensitive by default, Horizon paths are case-sensitive: every component is looked up exactly by guest name.
 // Ordinary host names are unchanged; only when a name collides on the host is a separate physical name chosen, with the guest name stored in an xattr.
 // clonefile preserves xattr, so save Commit/remount needs no separate mapping table; enumeration must not leak physical aliases.
+#ifdef __APPLE__
 #define FS_GUEST_NAME "org.d2rmobile.guest-name"   // the name this host has always used: existing saves carry it, so it is kept
+#define fs_xattr_get(p, buf, n) getxattr(p, FS_GUEST_NAME, buf, n, 0, XATTR_NOFOLLOW)
+#define fs_xattr_set(p, v, n) setxattr(p, FS_GUEST_NAME, v, n, 0, XATTR_NOFOLLOW)
+#define fs_xattr_del(p) removexattr(p, FS_GUEST_NAME, XATTR_NOFOLLOW)
+#else   // Linux: extended attributes need the user. namespace, the no-follow versions are l*; "no such attribute" is ENODATA
+#define FS_GUEST_NAME "user.org.d2rmobile.guest-name"
+#define fs_xattr_get(p, buf, n) lgetxattr(p, FS_GUEST_NAME, buf, n)
+#define fs_xattr_set(p, v, n) lsetxattr(p, FS_GUEST_NAME, v, n, 0)
+#define fs_xattr_del(p) lremovexattr(p, FS_GUEST_NAME)
+#ifndef ENOATTR
+#define ENOATTR ENODATA
+#endif
+#endif
 static int guest_name(const char *parent, const char *physical, char *out, size_t n) {
     // Only the physical names chosen on a case collision (.dm-case-N) carry the xattr (set_guest_name writes it only when the physical name differs from the guest name); any other physical name is the guest name,
     // so no per-entry getxattr is needed -- that was one system call per entry when listing, seconds for the 216,000 entries Engage walks in RomFS at boot
     if (strncmp(physical, ".dm-case-", 9)) { strlcpy(out, physical, n); return 1; }
     char p[1280]; snprintf(p, sizeof p, "%s/%s", parent, physical);
-    ssize_t k = getxattr(p, FS_GUEST_NAME, out, n - 1, 0, XATTR_NOFOLLOW);
+    ssize_t k = fs_xattr_get(p, out, n - 1);
     if (k >= 0) { out[k] = 0; return 1; }
     if (errno != ENOATTR) return 0;
     strlcpy(out, physical, n); return 1;
@@ -290,8 +303,8 @@ static int set_guest_name(const char *hp, const char *path) {
     if (k >= sizeof guest) { errno = ENAMETOOLONG; return -1; }
     memcpy(guest, start, k); guest[k] = 0;
     const char *physical = strrchr(hp, '/') + 1;
-    if (strcmp(physical, guest)) return setxattr(hp, FS_GUEST_NAME, guest, strlen(guest), 0, XATTR_NOFOLLOW);
-    if (!removexattr(hp, FS_GUEST_NAME, XATTR_NOFOLLOW) || errno == ENOATTR) return 0;
+    if (strcmp(physical, guest)) return fs_xattr_set(hp, guest, strlen(guest));
+    if (!fs_xattr_del(hp) || errno == ENOATTR) return 0;
     return -1;
 }
 static Result err_res(const char *op, const char *path) {
@@ -603,9 +616,14 @@ HLE_FORCE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm", "fsp-srv → pread(2)", 
                 static _Atomic int once; if (!once++) LOG("[fs] ReadFile into %p+%#zx: the destination was write-protected again during the read, prepared again at +%#zx (first case)", buf, sz, got);
                 dm_guest_write_prepare((uint8_t *)buf + got, sz - got); continue; }
             if (errno == EFAULT) {   // the destination is not writable host memory: say where, with the protection of its VM region
-                int e = errno; vm_address_t ra = (vm_address_t)((uint8_t *)buf + got); vm_size_t rs = 0; vm_region_basic_info_data_64_t vi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
+                int e = errno;
+#ifdef __APPLE__
+                vm_address_t ra = (vm_address_t)((uint8_t *)buf + got); vm_size_t rs = 0; vm_region_basic_info_data_64_t vi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
                 kern_return_t kr = vm_region_64(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&vi, &cnt, &obj);
                 LOG("[RED] fs ReadFile into %p+%#zx failed at +%#zx (EFAULT): VM region %#lx+%#lx protection %d%s", buf, sz, got, (unsigned long)ra, (unsigned long)rs, kr == KERN_SUCCESS ? vi.protection : -1, kr == KERN_SUCCESS ? "" : " (none)");
+#else
+                LOG("[RED] fs ReadFile into %p+%#zx failed at +%#zx (EFAULT)", buf, sz, got);
+#endif
                 errno = e; }
             return err_res("pread", "fd"); }
         if (r == 0) break;

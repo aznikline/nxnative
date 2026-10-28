@@ -28,3 +28,7 @@ static inline int pthread_get_qos_class_np(pthread_t t, qos_class_t *c, int *rel
     (void)t; if (c) *c = dm_qos_self_; if (rel) *rel = 0; return 0;
 }
 static inline qos_class_t qos_class_self(void) { return dm_qos_self_; }
+// pthread_override (priority lending, hle_thread.c lock wait): Linux has no equivalent API; a no-op leaves the owner on its own class
+typedef void *pthread_override_t;
+static inline pthread_override_t pthread_override_qos_class_start_np(pthread_t t, qos_class_t c, int rel) { (void)t; (void)c; (void)rel; return NULL; }
+static inline int pthread_override_qos_class_end_np(pthread_override_t o) { (void)o; return 0; }

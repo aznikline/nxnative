@@ -98,17 +98,19 @@ kern_return_t thread_info(thread_act_t t, int flavor, thread_info_t out, mach_ms
         thread_basic_info_data_t *bi = (thread_basic_info_data_t *)out; memset(bi, 0, sizeof *bi);
         bi->user_time.seconds = (int)ru.ru_utime.tv_sec; bi->user_time.microseconds = (int)ru.ru_utime.tv_usec;
         bi->system_time.seconds = (int)ru.ru_stime.tv_sec; bi->system_time.microseconds = (int)ru.ru_stime.tv_usec;
+        bi->run_state = TH_STATE_RUNNING;
         return KERN_SUCCESS;
     }
     char path[64], buf[1024]; snprintf(path, sizeof path, "/proc/self/task/%u/stat", t);
     FILE *f = fopen(path, "r"); if (!f) return KERN_FAILURE;
     size_t got = fread(buf, 1, sizeof buf - 1, f); fclose(f); buf[got] = 0;
     char *p = strrchr(buf, ')'); if (!p) return KERN_FAILURE;   // 线程名可含空格：从最后一个 ')' 之后数字段 | The thread name may contain spaces: count fields after the last ')'
-    unsigned long ut = 0, st = 0;
+    unsigned long ut = 0, st = 0; char state = '?';
     // ')' 后第 1 个字段是 state（总第 3 字段）；utime / stime 是总第 14 / 15 字段 | The first field after ')' is state (field 3 overall); utime / stime are fields 14 / 15 overall
-    if (sscanf(p + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut, &st) != 2) return KERN_FAILURE;
+    if (sscanf(p + 2, "%c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &state, &ut, &st) != 3) return KERN_FAILURE;
     long hz = sysconf(_SC_CLK_TCK); if (hz <= 0) hz = 100;
     thread_basic_info_data_t *bi = (thread_basic_info_data_t *)out; memset(bi, 0, sizeof *bi);
+    bi->run_state = state == 'R' ? TH_STATE_RUNNING : state == 'S' ? TH_STATE_WAITING : state == 'D' ? TH_STATE_UNINTERRUPTIBLE : state == 'T' || state == 't' ? TH_STATE_STOPPED : TH_STATE_HALTED;
     bi->user_time.seconds = (int)(ut / hz); bi->user_time.microseconds = (int)(ut % hz * 1000000 / hz);
     bi->system_time.seconds = (int)(st / hz); bi->system_time.microseconds = (int)(st % hz * 1000000 / hz);
     return KERN_SUCCESS;

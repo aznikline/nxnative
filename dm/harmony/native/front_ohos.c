@@ -12,9 +12,15 @@
 #include <stdlib.h>
 #include <sched.h>
 #include <qos/qos.h>
+#include <stdbool.h>
 #include <window_manager/oh_display_manager.h>
 #include <dlfcn.h>
+#if __has_include(<graphics_game_sdk/opengtx_base.h>)
 #include <graphics_game_sdk/opengtx_base.h>
+#define DM_HAVE_OPENGTX 1
+#else
+#define DM_HAVE_OPENGTX 0   // this sysroot (API < 26) has no OpenGTX kit header: the whole block is off, as when the library is absent
+#endif
 #include <unistd.h>
 
 static void *_Atomic g_window;
@@ -61,11 +67,20 @@ static void front_refresh_stop(void) {
     else if (!g_refresh_unregister_warned) { g_refresh_unregister_warned = true; LOG("Display refresh listener removal failed: rc=%d", r); }
 }
 
+void front_pin_fast(const char *who);
+void front_gtx_register(int who);
+void front_gtx_scene(int scene);
+void front_gtx_frame(void);
+
 // ---- front.h contract ----
 
 void *front_metal_layer(void) { return atomic_load(&g_window); }   // the OHNativeWindow* the Vulkan layer wraps into a VK_OHOS_surface
 
 int front_screen_max_fps(void) { return atomic_load(&g_refresh_millihz) / 1000; }
+double front_display_refresh(char *name, size_t n) {
+    if (name && n) *name = 0;
+    return atomic_load(&g_refresh_millihz) / 1000.0;
+}
 void front_screen_match(int fps) { (void)fps; }   // HarmonyOS does not let apps switch display modes
 
 // front_text_input lives in napi_ohos.c (it needs the NAPI bridge to the ArkTS dialog).
@@ -112,6 +127,7 @@ void front_pin_check(void) {
 }
 
 // ---- OpenGTX / FAST-Kit (game acceleration): generic, loaded at run time and skipped when unsupported ----
+#if DM_HAVE_OPENGTX
 static struct {
     void *lib; OpenGTX_Context *ctx; int main_tid, render_tid, key_tids[5], nkeys, active, scene;
     OpenGTX_Context *(*create)(OpenGTX_DeviceInfoCallback);
@@ -178,3 +194,8 @@ void front_gtx_frame(void) {
     if (g_gtx.active != 1 || !g_gtx.frame_info) return;
     OpenGTX_FrameRenderInfo fi; memset(&fi, 0, sizeof fi); g_gtx.frame_info(g_gtx.ctx, &fi);
 }
+#else
+void front_gtx_register(int who) { (void)who; }
+void front_gtx_scene(int scene) { (void)scene; }
+void front_gtx_frame(void) {}
+#endif

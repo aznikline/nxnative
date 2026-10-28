@@ -78,7 +78,7 @@ export struct IosOverlay {
     this.screen();
   }
   private screen(): void { if (this.cw > 0 && this.chh > 0) { dm.touchScreen(this.cw, this.chh, this.safeLeft, this.safeRight, this.safeBottom); } }
-  private ui(key: string): string { let v = this.text.get(key); if (v === undefined) { v = dm.uiText(key); this.text.set(key, v); } return v; }
+  private ui(key: string): string { const hit = this.text.get(key); if (hit !== undefined) { return hit; } const v = dm.uiText(key) as string; this.text.set(key, v); return v; }
 
   // ---- 素材 | Art ----
   private img(path: string): image.PixelMap | null {

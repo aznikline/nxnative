@@ -19,7 +19,9 @@
 #include "nvn_dirty.h"
 #include <mach/mach_time.h>
 #include <CommonCrypto/CommonDigest.h>
+#ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#endif
 #include <mach/mach.h>
 #include <TargetConditionals.h>
 #include <unistd.h>
@@ -32,12 +34,12 @@
 #endif
 #include <pthread/qos.h>
 #include <sys/resource.h>
+#ifdef __APPLE__
 #include <sys/sysctl.h>
 #include <mach/thread_policy.h>
+#endif
 #include <assert.h>
 #include <stdatomic.h>
-#include <mach-o/getsect.h>
-#include <mach-o/ldsyms.h>
 
 // ---------- Slot table, thunks, unimplemented stubs ----------
 typedef struct { _Atomic uint64_t cnt; void *fn; } nvn_slot_t;
@@ -63,12 +65,12 @@ typedef struct { const char *name; void *fn; } nvn_impl;
 #define NVN(name, ret, ...)                                                                       \
     static ret h_##name(__VA_ARGS__);                                                             \
     static const NVNT_##name chk_##name __attribute__((unused)) = h_##name;                       \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    DM_SECT(swnvn) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 // Newer interfaces without prototypes: no signature check
 #define NVN_NOPROTO(name, ret, ...)                                                               \
     static ret h_##name(__VA_ARGS__);                                                             \
-    __attribute__((used, section("__DATA,swnvn"))) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
+    DM_SECT(swnvn) static const nvn_impl e_##name = {#name, (void *)h_##name}; \
     static ret h_##name(__VA_ARGS__)
 
 static int g_log;
@@ -80,7 +82,7 @@ static void nvn_init_slots(void) {
     static int done; if (done) return; done = 1;
     g_log = getenv("DM_NVN_LOG") != NULL;
     unsigned long sz;
-    const nvn_impl *im = (const nvn_impl *)getsectiondata(&_mh_execute_header, "__DATA", "swnvn", &sz);
+    const nvn_impl *im; DM_SECT_GET(swnvn, const nvn_impl, im, sz);
     unsigned nim = im ? (unsigned)(sz / sizeof *im) : 0, hit = 0;
     for (unsigned i = 0; i < NVN_NFUNC; i++) nvn_slot[i].fn = (void *)nvn_unimpl_entry;
     for (unsigned k = 0; k < nim; k++) {
@@ -557,7 +559,9 @@ static void pk_drop(const void *p);
 NVN(nvnProgramFinalize, void, NVNprogram *p) { mtl_prog_release((prog_t *)p); ((prog_t *)p)->magic = 0; pk_drop(p); }
 // a program's per-stage keys (side table: guest NVNprogram address → host object; bit i of ok = stage i computed)
 typedef struct { uint8_t key[6][8]; uint8_t ok; } prog_keys_t;
-static pthread_mutex_t g_pk_mu = PTHREAD_MUTEX_INITIALIZER; static CFMutableDictionaryRef g_pk;   // a dedicated table (keys not shared with other side tables)
+static pthread_mutex_t g_pk_mu = PTHREAD_MUTEX_INITIALIZER;
+#ifdef __APPLE__
+static CFMutableDictionaryRef g_pk;   // a dedicated table (keys not shared with other side tables)
 static prog_keys_t *pk_get(const void *p, int make) {
     pthread_mutex_lock(&g_pk_mu);
     if (!g_pk) g_pk = CFDictionaryCreateMutable(NULL, 0, NULL, NULL);
@@ -572,6 +576,27 @@ static void pk_drop(const void *p) {
     if (k) { CFDictionaryRemoveValue(g_pk, p); free(k); }
     pthread_mutex_unlock(&g_pk_mu);
 }
+#else
+// No CoreFoundation: a small open-addressing table keyed by the guest program pointer (tombstones for removals)
+#define PK_CAP 512
+static prog_keys_t *g_pk_val[PK_CAP]; static const void *g_pk_key[PK_CAP]; static const void *const PK_TOMB = (const void *)1;
+static prog_keys_t *pk_get(const void *p, int make) {
+    pthread_mutex_lock(&g_pk_mu);
+    prog_keys_t *k = NULL;
+    for (unsigned i = 0; i < PK_CAP; i++) { unsigned j = ((unsigned)((uintptr_t)p >> 4) % PK_CAP + i) % PK_CAP;
+        if (g_pk_key[j] == p) { k = g_pk_val[j]; break; }
+        if (!g_pk_key[j] || g_pk_key[j] == PK_TOMB) { if (make) { k = calloc(1, sizeof *k); g_pk_key[j] = p; g_pk_val[j] = k; } break; } }
+    pthread_mutex_unlock(&g_pk_mu);
+    return k;
+}
+static void pk_drop(const void *p) {
+    pthread_mutex_lock(&g_pk_mu);
+    for (unsigned i = 0; i < PK_CAP; i++) { unsigned j = ((unsigned)((uintptr_t)p >> 4) % PK_CAP + i) % PK_CAP;
+        if (g_pk_key[j] == p) { free(g_pk_val[j]); g_pk_val[j] = NULL; g_pk_key[j] = PK_TOMB; break; }
+        if (!g_pk_key[j]) break; }
+    pthread_mutex_unlock(&g_pk_mu);
+}
+#endif
 // mapped = 1: computed only when the code area is in a registered memory pool (at SetShaders: Mario sets some programs with an unmapped address first and fills it in before the first draw)
 static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
     uint32_t ncode = 0; void *mb; uint64_t mo;
@@ -1336,6 +1361,7 @@ static int dcmp(const void *a, const void *b) { double x = *(const double *)a, y
 // wakeups per second (interrupt / out of platform idle), GPU time per second (task_gpu_utilisation), thermal state, and the guest threads that yielded most (hle_thread.c);
 // then render-target traffic per frame (attachment load / store bytes, passes that load and store everything, stores saved by DM_NVN_UNWRITTEN_DC) and guest-thread CPU by Switch priority
 static void power_line(uint64_t frame) {
+#ifdef __APPLE__
     static uint64_t pt, pe, pcpu, pp, piw, ppw, pg, pf, pld, pst, pfu, pudc; static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     task_power_info_v2_data_t pw; mach_msg_type_number_t n = TASK_POWER_INFO_V2_COUNT;
     if (task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&pw, &n) != KERN_SUCCESS) return;
@@ -1364,6 +1390,9 @@ static void power_line(uint64_t frame) {
         LOG("[nvn] threads up to frame %llu: CPU %s", frame, tc); }
     else { char yt[192], rs[400], tc[400]; dm_yield_top(yt, sizeof yt); mtl_res_stats(rs, sizeof rs); dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; ppw = idw; pg = g; pf = frame; mtl_bw(&pld, &pst, &pfu); pudc = mtl_udc_saved_bytes();
+#else
+    (void)frame;   // no task power info on musl: the whole summary is a diagnostics line
+#endif
 }
 static void tsummary(uint64_t frame) {
     char line[1024]; size_t o = 0;
@@ -1399,9 +1428,13 @@ static void tsummary(uint64_t frame) {
           static uint64_t pyn, pyns; uint64_t yn = 0, yns = 0; dm_main_yield_stats(&yn, &yns);
           LOG("[nvn] translation detail up to frame %llu: submit per frame %.2f M cycles (%.2f cycles per instruction), CPU %.3f ms of which kernel %.3f ms, wall clock %.3f ms; mean clock %.2f GHz (cycles / CPU time); this thread's QoS %#x; allocator pools %d, GPU waits so far %llu; real-time declared computation %.2f ms; main thread yields per frame %.0f / %.3f ms", frame,
               cyc / 1e6 / nf, cyc / (double)(ci - pi), cpu / 1e6 / nf, (double)(ck - pk) / 1e6 / nf, (double)(cw - pw) / 1e6 / nf, cpu > 0 ? cyc / cpu : 0, (unsigned)qc, an, (unsigned long long)aw, g_rt_comp_ms, (double)(yn - pyn) / nf, (double)(yns - pyns) / 1e6 / nf); pyn = yn; pyns = yns; }
-        if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
-            thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; int rt_live = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS && !def;   // def = 1: the real-time policy is not in effect (never set / revoked)
-            LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "in effect" : "not in effect", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, mtl_present_qos()); }
+        if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); int okx = 0, rt_live = 0, cp = -1, cpb = -1, cpo = -1;
+#ifdef __APPLE__
+            thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
+            thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; rt_live = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS && !def;   // def = 1: the real-time policy is not in effect (never set / revoked)
+            if (okx) { cp = xi.pth_curpri; cpb = xi.pth_priority; cpo = xi.pth_policy; }
+#endif
+            LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "in effect" : "not in effect", cp, cpb, cpo, wn, wq, mtl_present_qos()); }
         py = cy; pk = ck; pw = cw; }
       pi = ci; pc = cc; pd = dr_; pf = frame; }
     uint64_t up, re, fa, pr; mtl_pkg_stats(&up, &re); nvn_dirty_stats(&fa, &pr);
@@ -1449,6 +1482,7 @@ static void slow_emit(uint64_t f) {
 static int rt_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_RT"); v = !(e && !strcmp(e, "0")); if (!v) LOG("[nvn] DM_RT=0: the present thread gets no time-constraint policy (QoS only)"); } return v; }
 static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
     if (!rt_on()) return;
+#ifdef __APPLE__
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     if (comp_ns < 1000000ull) comp_ns = 1000000ull; if (comp_ns > period_ns * 9 / 10) comp_ns = period_ns * 9 / 10;
     thread_time_constraint_policy_data_t p = {
@@ -1457,6 +1491,9 @@ static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
     kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
     if (kr == KERN_SUCCESS) { g_rt_comp_ms = comp_ns / 1e6; g_rt_period_ms = period_ns / 1e6; }
     LOG("[nvn] present thread time-constraint policy (period %.3f ms, computation %.3f ms) %s", period_ns / 1e6, comp_ns / 1e6, kr == KERN_SUCCESS ? "set" : "failed to set");
+#else
+    (void)period_ns; (void)comp_ns;   // no Mach real-time policy on musl: the thread stays on its QoS only
+#endif
 }
 static int rt_comp_fixed_ms(void) { static int v = -2; if (v == -2) { const char *e = getenv("DM_RT_COMP"); v = e && *e && strcmp(e, "auto") ? atoi(e) : -1; } return v; }   // −1 = auto
 // The fixed value, or in auto mode the computation declared so far (auto's starting value of 2 ms only the first time): a reset to 2 ms at each period change under-declared the thread until the next p90
@@ -1545,6 +1582,7 @@ static uint64_t rt_period_ns(const win_t *o, uint64_t period) {
 // dips that low on a Mac at 30 fps now and then (26% once in 70 s, 97% around it)
 static int g_fs_pshare = -1;   // the last window's share in percent (−1 = not measured yet)
 static int fstep_cpu_slowed(uint64_t presents) {
+#ifdef __APPLE__
     static int levels = -1, slowed, low_was; static uint64_t pc, pp;
     if (levels < 0) { size_t n = sizeof levels; if (sysctlbyname("hw.nperflevels", &levels, &n, 0, 0)) levels = 1; }
     if (levels < 2 || presents % 30) return levels >= 2 && slowed;
@@ -1556,6 +1594,9 @@ static int fstep_cpu_slowed(uint64_t presents) {
     int low = g_fs_pshare >= 0 && g_fs_pshare < 30;
     slowed = low && low_was && dm_thermal_now() <= 1 && !dm_low_power_now(); low_was = low;
     return slowed;
+#else
+    (void)presents; return 0;   // no per-core-type CPU share on musl: the probe-permitting gate is not measured
+#endif
 }
 // Whether late frames may raise the hold above the cap's vsyncs (profile fps_hold, DM_FPS_HOLD=on / off). Off for a game whose updates do not wait for the presents and step
 // by the cap whatever the hold (Age of Calamity): holding frames there only paces the screen, and an iPhone lowers the GPU clock to the longer hold, so frames got slower and
@@ -1874,9 +1915,14 @@ static int vpool_map(struct vpool *v, const map_req *r) {   // caller holds g_vp
         vrun_set(v, (uint64_t)r->voff, (uint64_t)r->voff + r->size, 0); return 1;
     }
     uintptr_t from = (uintptr_t)ph->mem + (uintptr_t)r->poff;
+#ifdef __APPLE__
     vm_prot_t cur, max;
     kern_return_t kr = vm_remap(mach_task_self(), &to, r->size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)from, FALSE, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS || to != (vm_address_t)(v->base + r->voff)) { LOG("[RED] virtual pool remap %#lx → %p (%#llx bytes) failed: %d", (unsigned long)from, (void *)(v->base + r->voff), (unsigned long long)r->size, kr); return 0; }
+#else
+    // No page aliasing on musl (anonymous memory cannot be mapped twice): true sparse virtual pools are not implementable here; the page-table fallback still serves texture reads
+    LOG("[RED] virtual pool remap %#lx → %p (%#llx bytes): sparse pool aliasing unavailable on this platform", (unsigned long)from, (void *)(v->base + r->voff), (unsigned long long)r->size); return 0;
+#endif
     mprotect((void *)to, r->size, PROT_READ | PROT_WRITE);   // the source may be write-protected by the dirty tracker at this moment; the alias itself is plain memory
     vrun_set(v, (uint64_t)r->voff, (uint64_t)r->voff + r->size, 1);
     uint64_t end = (uint64_t)r->voff + r->size;

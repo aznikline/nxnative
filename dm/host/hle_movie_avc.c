@@ -4,6 +4,21 @@
 // VideoToolbox wants a format description built from SPS / PPS and NAL units with 4-byte length prefixes. Decoding is synchronous and yields pictures in decode order; MediaCodec yields them
 // in presentation order, so pictures wait in a queue sorted by presentation time and leave it once more than `depth` are queued (4 when the profile has B-frames, 0 for Baseline), or all at the end of the stream
 #include "hle.h"
+#ifdef __OHOS__
+// No hardware H.264 decoder on musl yet: the decoder object exists but never produces a picture (the SDK protocol is intact; a game waiting on the last frame sees it never arrive)
+#include "hle_movie_avc.h"
+#include <stdlib.h>
+struct mavc { int _unused; };
+mavc *mavc_new(void) { static int red; if (!red++) LOG("[RED] movie: H.264 decoding is not implemented on this platform"); return calloc(1, sizeof(struct mavc)); }
+void mavc_free(mavc *a) { free(a); }
+void mavc_param_sets(mavc *a, const uint8_t *p, size_t n) { (void)a; (void)p; (void)n; }
+void mavc_avcc(mavc *a, const uint8_t *p, size_t n) { (void)a; (void)p; (void)n; }
+int mavc_decode(mavc *a, const uint8_t *p, int n, int64_t pts_us) { (void)a; (void)p; (void)n; (void)pts_us; return -1; }
+int mavc_take(mavc *a, int flush, uint8_t *nv12, int w, int h, int64_t *pts_us) { (void)a; (void)flush; (void)nv12; (void)w; (void)h; (void)pts_us; return 0; }
+int mavc_queued(const mavc *a) { (void)a; return 0; }
+void mavc_set_rgba(mavc *a) { (void)a; }
+void mavc_drop(mavc *a) { (void)a; }
+#else
 #include <VideoToolbox/VideoToolbox.h>
 #include <arm_neon.h>
 #include "hle_movie_avc.h"
@@ -141,3 +156,4 @@ int mavc_take(mavc *a, int flush, uint8_t *dst, int w, int h, int64_t *pts_us) {
     CVPixelBufferRelease(pb);
     return 1;
 }
+#endif

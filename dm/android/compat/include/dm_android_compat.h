@@ -58,6 +58,7 @@ static inline int renamex_np(const char *from, const char *to, unsigned flags) {
 // or "now + ns" — sem_t with an absolute-clock wait covers both (nxnative OHOS carry-over).
 #include <semaphore.h>
 #include <limits.h>
+#include <stdlib.h>
 typedef sem_t *dispatch_semaphore_t;
 #define DISPATCH_TIME_FOREVER (~(uint64_t)0)
 #define DISPATCH_TIME_NOW 0
@@ -77,4 +78,5 @@ static inline long dispatch_semaphore_wait(dispatch_semaphore_t s, uint64_t time
     ts.tv_sec = (time_t)(dl / 1000000000ull); ts.tv_nsec = (long)(dl % 1000000000ull);
     return sem_timedwait(s, &ts);
 }
+static inline void dispatch_release(dispatch_semaphore_t s) { if (s) { sem_destroy(s); free(s); } }
 #endif

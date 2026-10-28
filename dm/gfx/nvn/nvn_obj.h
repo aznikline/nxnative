@@ -130,8 +130,8 @@ typedef struct { int32_t stage, first, n, defer; uint64_t src; uint64_t h[32]; }
 // Read it with bind_rec, which gives a p_bind_handles
 typedef struct { int32_t stage, slot; uint64_t h; int32_t tbase, sbase; } p_bind_tex1;
 static inline const p_bind_handles *bind_rec(uint32_t op, const void *a, p_bind_handles *t) {
-    if (op != OP_BIND_TEX1) return a;
-    const p_bind_tex1 *b = a; uint64_t tid = b->h & 0xfffff, sid = (uint32_t)b->h >> 20;
+    if (op != OP_BIND_TEX1) return (const p_bind_handles *)a;
+    const p_bind_tex1 *b = (const p_bind_tex1 *)a; uint64_t tid = b->h & 0xfffff, sid = (uint32_t)b->h >> 20;
     t->stage = b->stage; t->first = b->slot; t->n = 1; t->defer = 0; t->src = 0;
     t->h[0] = (tid ? tid + (uint64_t)b->tbase : 0) | (sid ? sid + (uint64_t)b->sbase : 0) << 20; return t;
 }
@@ -146,8 +146,8 @@ typedef struct { int32_t prim, itype, count, base_vertex, base_instance, instanc
 // Games size command memory by what nvnCommandBufferGetCommandMemoryUsed reports, so a plain draw must not take more of it than the real driver's commands do. Breath of the Wild
 // records each mesh's draw into a scratch command buffer and reserves that many bytes per mesh for the model's prerecorded draws, in the heap its resource size table sizes:
 // at 0x50 bytes per recorded draw (0x30 now, with its END) three models needed one 4 KB page more than their table entry, and loading them crashed (main+0x155a7a4)
-static inline const p_draw *draw_rec(const void *a, uint32_t size, p_draw *t) { if (size - 8 >= sizeof *t) return a; memset(t, 0, sizeof *t); memcpy(t, a, size - 8); return t; }
-static inline const p_draw_idx *draw_idx_rec(const void *a, uint32_t size, p_draw_idx *t) { if (size - 8 >= sizeof *t) return a; memset(t, 0, sizeof *t); memcpy(t, a, size - 8); return t; }
+static inline const p_draw *draw_rec(const void *a, uint32_t size, p_draw *t) { if (size - 8 >= sizeof *t) return (const p_draw *)a; memset(t, 0, sizeof *t); memcpy(t, a, size - 8); return t; }
+static inline const p_draw_idx *draw_idx_rec(const void *a, uint32_t size, p_draw_idx *t) { if (size - 8 >= sizeof *t) return (const p_draw_idx *)a; memset(t, 0, sizeof *t); memcpy(t, a, size - 8); return t; }
 typedef struct { int32_t x, y, z; uint64_t caller, ind; } p_dispatch;   // caller: return address of the game call site (to locate the dispatcher); ind != 0: DispatchComputeIndirect, the group counts are read by the GPU from that address
 typedef struct { const dpool_t *pool; } p_set_pool;
 typedef struct { uint64_t src; const tex_t *tex; view_t view; uint8_t has_view; NVNcopyRegion r; int32_t flags; } p_copy_b2t;

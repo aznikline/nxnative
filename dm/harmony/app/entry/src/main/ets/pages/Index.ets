@@ -46,13 +46,13 @@ struct Index {
       },
       (code: number) => { this.started = false; this.error = `${this.t('dmAndroidStartFailed') || '启动失败'} (${code})`; });
     try { display.getDefaultDisplaySync() && dm.refresh(display.getDefaultDisplaySync().refreshRate); } catch (e) { }
-    const rc = dm.start(this.files, this.files, this.dataDir(), this.lang.startsWith('zh') ? 'zh-Hans' : 'en-US');
+    const rc = dm.start(this.files, this.files, this.dataDir(), this.lang.startsWith('zh') ? 'zh-Hans' : 'en-US') as number;
     if (rc > 0) {
       this.started = true;
       // 调试帧率（顶部居中，同老版）：每秒取出图帧数差 | Debug FPS (top center, as the old build): presented-frame difference per second
       this.lastPresents = dm.presentCount(); this.lastFpsAt = Date.now();
       this.fpsTimer = setInterval(() => {
-        const n = dm.presentCount(), t = Date.now();
+        const n = dm.presentCount() as number, t = Date.now();
         this.fps = `${Math.round((n - this.lastPresents) * 1000 / Math.max(1, t - this.lastFpsAt))} FPS`;
         this.lastPresents = n; this.lastFpsAt = t;
       }, 1000);

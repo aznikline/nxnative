@@ -13,3 +13,4 @@
 .clangd
 /entry/src/main/cpp/local.cmake
 /entry/src/debugpack/resources/resfile/dm/
+**/.hvigor/

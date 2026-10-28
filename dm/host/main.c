@@ -3,7 +3,9 @@
 #include "front.h"
 #include <stdatomic.h>
 #include <sys/resource.h>
+#ifdef __APPLE__
 #include <sys/sysctl.h>
+#endif
 #include <sys/time.h>
 #include <unistd.h>
 void probe_install(void); void hid_keys_init(void); void stubs_report(void); void crash_install(void); void guest_thread_init(void); uint32_t svc_thread_main_init(void);
