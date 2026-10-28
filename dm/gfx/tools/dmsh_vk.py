@@ -187,6 +187,7 @@ def decode_tex(slots, h, image):
 def export(key, stage, c1, spv, res):
     """改写后的 SPIR-V + 翻译器的 res.json → vk.json（字段见 pack_game_shaders.py） | Rewritten SPIR-V + the translator's res.json → vk.json (fields: see pack_game_shaders.py)"""
     caps, exts, deco, types, ptr, var, names, consts = spirv_info(spv)
+    exts = [e for e in exts if e != 'SPV_EXT_shader_viewport_index_layer']   # engine accepts it: cap 70 whitelisted via enabled_viewport_index_layer (vulkan_present enables the device ext)
     if exts: raise ValueError('残留扩展 ' + ','.join(exts))
     by_bind = {}
     for vid, (pt, sc) in var.items():

@@ -17,6 +17,9 @@ typedef struct xbg_game_config {
     uint32_t queue_family;
     VkPhysicalDeviceFeatures enabled_core;
     VkBool32 enabled_shader_draw_parameters;
+    /* VK_EXT_shader_viewport_index_layer (device feature): vertex/hull shaders that write gl_Layer
+       (Unity single-pass layered draws; Silksong ships 14) carry OpCapability 70. */
+    VkBool32 enabled_viewport_index_layer;
     uint64_t fence_timeout_ns;
     const char *shader_directory; /* <control-sha256-first16>.xgs bundles */
     void *userdata;
