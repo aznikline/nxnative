@@ -30,12 +30,22 @@ static void create_keys(void) {
     LOG("key numbers K18=%lu KTLS=%lu KTLR=%lu KGATE=%lu", g_key18, g_keytls, g_keytlr, g_keygate);
 }
 
-// K slot check: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key
+// K slot check: the pthread TSD layout is fixed, slot = tpidrro_el0 + 8*key (Apple) /
+// *(tpidr_el0 - 272) + 8*key (musl's struct pthread TSD pointer, DM_TARGET=ohos in patch_nso.py)
 static void tsd_check(void) {
     pthread_setspecific(g_key18, (void *)0x1234);
+#ifdef __OHOS__
+    uint64_t tp; __asm__ volatile("mrs %0, tpidr_el0" : "=r"(tp));
+    uint64_t base = *(uint64_t *)(tp - 272);
+#else
     uint64_t base; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(base));
+#endif
     uint64_t off = *(uint64_t *)(g_mod[0].base + g_mod[0].key_page_off + g_mod[0].key_idx[KEY_K18] * 8);
+#ifdef __OHOS__
+    if (((uint64_t *)base)[off / 8] != 0x1234) die("TSD layout mismatch (musl tpidr_el0-272)");
+#else
     if (((uint64_t *)(base & ~7ull))[off / 8] != 0x1234) die("TSD layout mismatch");
+#endif
     pthread_setspecific(g_key18, 0);
 }
 
