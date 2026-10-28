@@ -2622,9 +2622,19 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
             VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};write.dstSet=VK_NULL_HANDLE;write.dstBinding=b.binding;write.dstArrayElement=element;write.descriptorCount=1;write.descriptorType=UBO_DYN(dmode,b)?VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC:VkDescriptorType(b.type);
             if(b.type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || b.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER){DESC_SCOPE(BufferBind);
                 Buffer *buffer=nullptr;bool is_storage=b.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;uint32_t slot=b.slot+element;size_t n=0,buffer_offset=0;const void *data=nullptr;size_t copy=0;
-                if(b.source==XBG_SOURCE_UNIFORM || b.source==XBG_SOURCE_STORAGE){need(slot<16,"Buffer slot out of bounds");auto r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][slot]:state.sb[ns][slot];if(!r.address||!r.size)xbg_fatalf("Required NVN buffer slot unbound: %s stage=%u slot=%u binding=%u shader=%s",b.source==XBG_SOURCE_UNIFORM?"UBO":"SSBO",ns,slot,b.binding,shader.key.c_str());data=reinterpret_cast<void*>(r.address);copy=r.size;
+                if(b.source==XBG_SOURCE_UNIFORM || b.source==XBG_SOURCE_STORAGE){need(slot<16,"Buffer slot out of bounds");auto r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][slot]:state.sb[ns][slot];
+                    if(!r.address||!r.size){
+                        // Probe: the game draws with a slot it never bound in this stream (UBO stage 0 slot 1 on
+                        // Silksong). Feed a zeroed buffer instead of fataling so the rest of the draw path is
+                        // exercised; a real fix either records the missing bind or models its semantics.
+                        static Buffer unbound_zero;static bool unbound_zero_ready=false;if(!unbound_zero_ready){size_t zn=uniform_range(65536);unbound_zero=static_arena.alloc(zn);memset(unbound_zero.mapped,0,zn);unbound_zero.flush();unbound_zero_ready=true;}
+                        data=nullptr;copy=0;n=uniform_range(65536);buffer=out.keep(unbound_zero);
+                    }
+                    else{
+                    data=reinterpret_cast<void*>(r.address);copy=r.size;
                     if(is_storage){n=copy;for(auto &v:out.storage)if(r.address>=v.first.first && r.address+r.size<=v.first.first+v.first.second){buffer=v.second;buffer_offset=r.address-v.first.first;break;}need(buffer,"Storage alias allocation not found");need(buffer_offset%properties.limits.minStorageBufferOffsetAlignment==0,"NVN storage offset violates Vulkan alignment");}
                     else{copy=std::min<size_t>(copy,b.bytes?b.bytes:65536);n=uniform_range(copy);buffer=out.keep(uniform_snapshot(r.address,copy));}
+                    }
                 }else if(b.source==XBG_SOURCE_SUPPORT){n=1392;need(state.color.alpha_func==8,"Nontrivial NVN alpha test not translated");
                     Buffer &sb=support_block();data=sb.mapped;copy=n;buffer=out.keep(sb);}
                 else if(b.source==XBG_SOURCE_C1){
