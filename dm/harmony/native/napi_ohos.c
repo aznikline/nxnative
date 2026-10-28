@@ -23,6 +23,7 @@
 void front_android_set_window(void *win, int w, int h);
 void front_android_set_refresh(float hz);
 int dm_main(int argc, char **argv);
+static const char *ev_run_all(char *r, size_t n);
 
 #define HLOG(lvl, tag, ...) do { char b_[1024]; snprintf(b_, sizeof b_, __VA_ARGS__); OH_LOG_Print(LOG_APP, lvl, 0xD2E0, tag, "%{public}s", b_); } while (0)
 
@@ -173,6 +174,7 @@ static napi_value js_start(napi_env env, napi_callback_info info) {
         for (int c = 0; c < 16; c++) { char p[96]; snprintf(p, sizeof p, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c); FILE *f = fopen(p, "r"); if (!f) continue;
             long khz = 0; if (fscanf(f, "%ld", &khz) == 1) at += snprintf(line + at, sizeof line - at, " %d:%ld", c, khz / 1000); fclose(f); }
         LOG("boot: CPU core max MHz%s", at ? line : " (unreadable)");
+        char ev[512]; ev_run_all(ev, sizeof ev);
     }
     char romfs[1100], save[1100], temp[1100], runtime_link[1200];
     snprintf(romfs, sizeof romfs, "%s/RomFS", g_src);
@@ -243,19 +245,63 @@ static napi_value js_touch_tick(napi_env env, napi_callback_info info) { (void)i
 // instructions; returns "ok" or the failing step and errno. Whether the system allows executable memory under
 // release signing is confirmed on device with this; the result is shown on the start / error page.
 #include <sys/mman.h>
-static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
-    (void)info; char r[96];
-    uint32_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (pg == MAP_FAILED) snprintf(r, sizeof r, "mmap errno %d", errno);
+#include <fcntl.h>
+#include <setjmp.h>
+#include <signal.h>
+static sigjmp_buf ev_jb;
+static void ev_segv(int s) { (void)s; siglongjmp(ev_jb, 1); }
+static int ev_try(const char *name, int prot_first, int prot_then, int use_file, char *out, size_t on) {
+    void *pg;
+    if (use_file) {
+        static const char *dirs[] = { "/data/storage/el2/base/haps/entry/files/ev_code.bin", "./ev_code.bin" };
+        int fd = -1;
+        for (unsigned i = 0; i < 2 && fd < 0; i++) fd = open(dirs[i], O_CREAT | O_RDWR | O_TRUNC, 0600);
+        if (fd < 0) { snprintf(out, on, "%s: open errno %d", name, errno); return 0; }
+        uint32_t code[2] = {0x52800540, 0xd65f03c0};   // mov w0,#42; ret
+        write(fd, code, 8); fsync(fd);
+        pg = mmap(NULL, 0x4000, prot_first, MAP_PRIVATE, fd, 0);
+        close(fd);
+    } else {
+        pg = mmap(NULL, 0x4000, prot_first, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
+    if (pg == MAP_FAILED) snprintf(out, on, "%s: mmap errno %d", name, errno);
     else {
-        pg[0] = 0x52800540; pg[1] = 0xd65f03c0;   // mov w0, #42; ret
-        __builtin___clear_cache((char *)pg, (char *)(pg + 2));
-        if (mprotect(pg, 0x4000, PROT_READ | PROT_EXEC)) snprintf(r, sizeof r, "mprotect errno %d", errno);
-        else { int v = ((int (*)(void))pg)(); snprintf(r, sizeof r, v == 42 ? "ok" : "bad result %d", v); }
+        if (!use_file) { uint32_t *p = pg; p[0] = 0x52800540; p[1] = 0xd65f03c0; __builtin___clear_cache((char *)p, (char *)(p + 2)); }
+        if (prot_then && mprotect(pg, 0x4000, prot_then)) snprintf(out, on, "%s: mprotect errno %d", name, errno);
+        else {
+            struct sigaction sa = {0}, old; sa.sa_handler = ev_segv; sigemptyset(&sa.sa_mask);
+            sigaction(SIGSEGV, &sa, &old);
+            int v = sigsetjmp(ev_jb, 1) ? -999 : ((int (*)(void))pg)();
+            sigaction(SIGSEGV, &old, NULL);
+            if (v == -999) snprintf(out, on, "%s: exec fault (SIGSEGV)", name);
+            else snprintf(out, on, v == 42 ? "%s: ok" : "%s: bad result %d", name, v);
+        }
         munmap(pg, 0x4000);
     }
-    LOG("boot: exec memory probe %s", r);
-    napi_value out; napi_create_string_utf8(env, r, NAPI_AUTO_LENGTH, &out); return out;
+    if (use_file) { unlink("/data/storage/el2/base/haps/entry/files/ev_code.bin"); unlink("./ev_code.bin"); }
+    return 1;
+}
+static const char *ev_run_all(char *r, size_t n) {
+    char *p = r; size_t left = n;
+    struct { const char *name; int first, then, file; } v[] = {
+        {"anon RW->RX", PROT_READ | PROT_WRITE, PROT_READ | PROT_EXEC, 0},
+        {"anon RWX direct", PROT_READ | PROT_WRITE | PROT_EXEC, 0, 0},
+        {"anon RX only", PROT_READ | PROT_EXEC, 0, 0},
+        {"anon EXEC only", PROT_EXEC, 0, 0},
+        {"file RX", PROT_READ | PROT_EXEC, 0, 1},
+        {"file RWX", PROT_READ | PROT_WRITE | PROT_EXEC, 0, 1},
+        {"file RW->RX", PROT_READ | PROT_WRITE, PROT_READ | PROT_EXEC, 1},
+    };
+    for (unsigned i = 0; i < sizeof v / sizeof v[0]; i++) {
+        char line[128]; if (!ev_try(v[i].name, v[i].first, v[i].then, v[i].file, line, sizeof line)) break;
+        int k = snprintf(p, left, "%s%s", line, i + 1 < sizeof v / sizeof v[0] ? "; " : ""); p += k; left -= k;
+        LOG("boot: exec memory probe %s", line);
+    }
+    return r;
+}
+static napi_value js_exec_probe(napi_env env, napi_callback_info info) {
+    (void)info; char r[512];
+    napi_value out; napi_create_string_utf8(env, ev_run_all(r, sizeof r), NAPI_AUTO_LENGTH, &out); return out;
 }
 // Debug FPS: presented frame count (nvn_vk.c mtl_present_count); ArkTS shows the per-second difference
 uint64_t mtl_present_count(void);
