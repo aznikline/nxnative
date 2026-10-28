@@ -1956,7 +1956,22 @@ Shader *load_shader(const void *control){
 std::map<uint64_t,std::array<Shader*,6>> program_cache;
 const std::array<Shader*,6> &program_shaders(const prog_t *prog){
     if(prog->serial){auto it=program_cache.find(prog->serial);if(it!=program_cache.end())return it->second;}
-    std::array<Shader*,6> out{};for(unsigned i=0;i<prog->nstage && i<6;i++)out[i]=load_shader(prog->sd[i].control);
+    std::array<Shader*,6> out{};for(unsigned i=0;i<prog->nstage && i<6;i++){
+        // A program the static split missed: dump its control segment + code area for offline
+        // translation (the .xgs pipeline consumes a BTCDBTCD record; the dump is exactly that body).
+        std::string mk=control_key(prog->sd[i].control);
+        std::string want=std::string(cfg.shader_directory)+"/"+mk+".xgs";
+        if(FILE *f=fopen(want.c_str(),"rb"))fclose(f);
+        else{
+            const uint8_t *ctl=(const uint8_t*)prog->sd[i].control;
+            uint32_t clen=*(const uint32_t*)(ctl+0x20),csz=*(const uint32_t*)(ctl+0x704);
+            char dump[1300];snprintf(dump,sizeof dump,"%s/missing-%s.ctl",cfg.shader_directory,mk.c_str());
+            if(FILE *o=fopen(dump,"wb")){fwrite(ctl,1,clen?clen:0x880,o);fclose(o);}
+            if(prog->sd[i].data&&csz){snprintf(dump,sizeof dump,"%s/missing-%s.code",cfg.shader_directory,mk.c_str());if(FILE *o=fopen(dump,"wb")){fwrite((const void*)prog->sd[i].data,1,csz,o);fclose(o);}}
+            xbg_logf("NVN missing shader %s dumped control=%u code=%u",mk.c_str(),clen,csz);
+        }
+        out[i]=load_shader(prog->sd[i].control);
+    }
     if(!prog->serial){static std::array<Shader*,6> scratch;scratch=out;return scratch;}
     return program_cache.emplace(prog->serial,out).first->second;
 }
