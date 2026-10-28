@@ -2451,3 +2451,5 @@ ps_main.bin	5	pixel	abcdb66b44f1313d	main#GLSLC@0x6b9e498
 vs_main.bin	2	vertex	f3a2af4f812f7366	main#GLSLC@0x6b9f358
 ps_main.bin	6	pixel	987c069874bbe974	main#GLSLC@0x6b9ff18
 cs_main.bin	0	compute	552bbc8ffc2459e4	main#GLSLC@0x6ba0ad8
+vs_extra.bin	0	vertex	f57966d6e57403b3	runtime-dump#missing-program
+ps_extra.bin	0	pixel	d2a38ae165ad8d4c	runtime-dump#missing-program
