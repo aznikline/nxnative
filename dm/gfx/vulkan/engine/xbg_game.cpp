@@ -3553,7 +3553,7 @@ void execute_indirect(const xbg_indirect &p,bool single){preflight_cpu_reads();
         execute_draw_call(plan);
     }
 }
-template<class T>T payload(const uint8_t *p,size_t n){need(n>=sizeof(T),"Truncated NVN command payload");T out;memcpy(&out,p,sizeof(out));return out;}
+template<class T>T payload(const uint8_t *p,size_t n){if(n<sizeof(T))xbg_fatalf("Truncated NVN command payload op=%u have=%zu want=%zu",cur_op,n,sizeof(T));T out;memcpy(&out,p,sizeof(out));return out;}
 template<class T>T variable_payload(const uint8_t *p,size_t n){T out{};memcpy(&out,p,std::min(n,sizeof(T)));return out;}
 // Graphics thread: retire submitted slots whose fence already signalled (non-blocking) so a game
 // thread blocked on an older fence is released while the next frame is still being translated.
