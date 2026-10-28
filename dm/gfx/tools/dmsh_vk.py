@@ -225,6 +225,14 @@ def export(key, stage, c1, spv, res):
             vid, tid, sc = by_bind[vbind(t['binding'])]
             img = image_desc(types, tid)
             slot, samp, ty = decode_tex(t['cbuf_slot'], t['handle'], kind == 'image')
+            if kind == 'texture' and slot is None:
+                # A "texture" whose handle is an image-table offset (the shader touches it through
+                # image ops -- e.g. Silksong's compute shader binding 1, flags 3): emit the image desc.
+                slot, samp, ty = decode_tex(t['cbuf_slot'], t['handle'], True)
+                if slot is not None:
+                    descs.append({'name': names.get(vid, ''), 'binding': vbind(t['binding']), 'type': 'storage_texel_buffer' if img['dim'] == 5 else 'storage_image',
+                                  'count': 1, 'source': {'category': 'nvn', 'nvn': {'kind': 'image', 'slot': slot}, 'handle_decode': {'type': ty}}, 'image': img})
+                    continue
             if slot is None: raise ValueError(f'{kind} 槽解不出：{t}')
             if kind == 'texture':
                 typ = 'uniform_texel_buffer' if img['dim'] == 5 else 'combined_image_sampler'
